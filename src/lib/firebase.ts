@@ -106,88 +106,103 @@ export async function fetchFromCloud(): Promise<TempleBackupData | null> {
   }
 }
 
-// Helper: safe get server doc lastModified (returns number or 0)
-async function getServerLastModified(ref: any): Promise<number> {
+// Helper: get server-side lastModified from a syncMeta doc for a collection
+async function getServerMetaLastModified(name: string): Promise<number> {
   try {
-    const serverDoc = await getDocFromServer(ref);
-    if (serverDoc.exists()) {
-      const data = serverDoc.data() as any;
+    const metaRef = doc(db, "syncMeta", name);
+    const metaDoc = await getDocFromServer(metaRef);
+    if (metaDoc.exists()) {
+      const data = metaDoc.data() as any;
       return typeof data.lastModified === "number" ? data.lastModified : 0;
     }
     return 0;
   } catch (e) {
-    // If we cannot reach server (offline), return 0 so client may write to local cache
+    // If offline or error, return 0 so client may write to local cache
     return 0;
   }
 }
 
+// Helper: update syncMeta lastModified for a collection
+async function updateServerMetaLastModified(name: string, timestamp: number) {
+  try {
+    const metaRef = doc(db, "syncMeta", name);
+    await setDoc(metaRef, { lastModified: timestamp }, { merge: true });
+  } catch (e) {
+    console.warn("Failed to update syncMeta for", name, e);
+  }
+}
+
 // 2. Save entire database to Firestore in a batched/parallel way
-// Adds lastModified timestamps and checks server-side timestamps to avoid overwriting newer cloud data.
+// Uses collection-level lastModified checks (syncMeta) to reduce per-doc reads.
 export async function saveToCloud(data: TempleBackupData): Promise<void> {
   try {
     const now = Date.now();
 
-    // 2.1 Save Temple Info (with check)
+    // 2.1 Temple Info
     try {
-      const infoRef = doc(db, "templeConfig", "info");
-      const serverLast = await getServerLastModified(infoRef);
+      const serverMeta = await getServerMetaLastModified("templeInfo");
       const localLast = (data.templeInfo && data.templeInfo.lastModified) || 0;
-      if (serverLast > localLast) {
+      const infoRef = doc(db, "templeConfig", "info");
+      if (serverMeta > localLast) {
         console.log("Skipping templeInfo write because cloud is newer.");
       } else {
         await setDoc(infoRef, { ...data.templeInfo, lastModified: now });
+        await updateServerMetaLastModified("templeInfo", now);
       }
     } catch (e) {
-      console.warn("TempleInfo save encountered an issue, attempting to set locally:", e);
+      console.warn("TempleInfo save encountered an issue:", e);
       await setDoc(doc(db, "templeConfig", "info"), { ...data.templeInfo, lastModified: now });
+      await updateServerMetaLastModified("templeInfo", now);
     }
 
-    // 2.2 Save Bank Accounts
-    const bankBatch = writeBatch(db);
-    for (const bank of data.bankAccounts) {
-      const bankRef = doc(db, "bankAccounts", bank.id);
-      const serverLast = await getServerLastModified(bankRef);
-      const localLast = (bank as any).lastModified || 0;
-      if (serverLast > localLast) {
-        console.log(`Skipping bank ${bank.id} because cloud is newer.`);
-        continue;
+    // 2.2 Bank Accounts
+    const bankServerMeta = await getServerMetaLastModified("bankAccounts");
+    const localBankMax = data.bankAccounts.reduce((m, b) => Math.max(m, (b as any).lastModified || 0), 0);
+    if (bankServerMeta > localBankMax) {
+      console.log("Skipping bankAccounts write because cloud is newer.");
+    } else {
+      const bankBatch = writeBatch(db);
+      for (const bank of data.bankAccounts) {
+        const bankRef = doc(db, "bankAccounts", bank.id);
+        bankBatch.set(bankRef, { ...bank, lastModified: now });
       }
-      bankBatch.set(bankRef, { ...bank, lastModified: now });
+      await bankBatch.commit();
+      await updateServerMetaLastModified("bankAccounts", now);
     }
-    await bankBatch.commit();
 
-    // 2.3 Save Transactions (chunked)
-    // Firestore batches are limited to 500 writes. We will write transactions in chunks.
-    const CHUNK_SIZE = 400;
-    for (let i = 0; i < data.transactions.length; i += CHUNK_SIZE) {
-      const chunk = data.transactions.slice(i, i + CHUNK_SIZE);
-      const txBatch = writeBatch(db);
-      for (const tx of chunk) {
-        const txRef = doc(db, "transactions", tx.id);
-        const serverLast = await getServerLastModified(txRef);
-        const localLast = (tx as any).lastModified || 0;
-        if (serverLast > localLast) {
-          console.log(`Skipping transaction ${tx.id} because cloud is newer.`);
-          continue;
+    // 2.3 Transactions (chunked)
+    const txServerMeta = await getServerMetaLastModified("transactions");
+    const localTxMax = data.transactions.reduce((m, t) => Math.max(m, (t as any).lastModified || 0), 0);
+    if (txServerMeta > localTxMax) {
+      console.log("Skipping transactions write because cloud is newer.");
+    } else {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < data.transactions.length; i += CHUNK_SIZE) {
+        const chunk = data.transactions.slice(i, i + CHUNK_SIZE);
+        const txBatch = writeBatch(db);
+        for (const tx of chunk) {
+          const txRef = doc(db, "transactions", tx.id);
+          txBatch.set(txRef, { ...tx, lastModified: now });
         }
-        txBatch.set(txRef, { ...tx, lastModified: now });
+        await txBatch.commit();
       }
-      await txBatch.commit();
+      await updateServerMetaLastModified("transactions", now);
     }
 
-    // 2.4 Save Users
-    const usersBatch = writeBatch(db);
-    for (const u of data.users) {
-      const uRef = doc(db, "users", u.username);
-      const serverLast = await getServerLastModified(uRef);
-      const localLast = (u as any).lastModified || 0;
-      if (serverLast > localLast) {
-        console.log(`Skipping user ${u.username} because cloud is newer.`);
-        continue;
+    // 2.4 Users
+    const usersServerMeta = await getServerMetaLastModified("users");
+    const localUsersMax = data.users.reduce((m, u) => Math.max(m, (u as any).lastModified || 0), 0);
+    if (usersServerMeta > localUsersMax) {
+      console.log("Skipping users write because cloud is newer.");
+    } else {
+      const usersBatch = writeBatch(db);
+      for (const u of data.users) {
+        const uRef = doc(db, "users", u.username);
+        usersBatch.set(uRef, { ...u, lastModified: now });
       }
-      usersBatch.set(uRef, { ...u, lastModified: now });
+      await usersBatch.commit();
+      await updateServerMetaLastModified("users", now);
     }
-    await usersBatch.commit();
 
   } catch (error) {
     console.error("Error saving to Firebase cloud:", error);
