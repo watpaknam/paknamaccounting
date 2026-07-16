@@ -1,0 +1,6 @@
+{
+  "name": "ระบบบัญชีรายรับ-รายจ่ายวัด",
+  "description": "ระบบบันทึกและรายงานบัญชีรายรับ-รายจ่ายสำหรับวัด ตามมาตรฐานสำนักงานพระพุทธศาสนาแห่งชาติ และมติมหาเถรสมาคม",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
