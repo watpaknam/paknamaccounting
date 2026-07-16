@@ -20,8 +20,12 @@ import {
   BarChart3, 
   LogOut,
   Building2,
-  Database
+  Database,
+  Cloud,
+  CloudOff,
+  RefreshCw
 } from "lucide-react";
+import { fetchFromCloud, saveToCloud } from "./lib/firebase";
 
 export default function App() {
   // Authentication State
@@ -84,6 +88,88 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("temple_users", JSON.stringify(users));
   }, [users]);
+
+  // Cloud Database Sync State
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<"checking" | "synced" | "syncing" | "error" | "offline">("checking");
+  const [lastCloudSync, setLastCloudSync] = useState<string | null>(null);
+  const [hasLoadedInitialCloud, setHasLoadedInitialCloud] = useState(false);
+
+  // Load from Cloud once on startup
+  useEffect(() => {
+    async function loadCloud() {
+      try {
+        setCloudSyncStatus("checking");
+        const cloudData = await fetchFromCloud();
+        if (cloudData) {
+          setTempleInfo(cloudData.templeInfo);
+          setBankAccounts(cloudData.bankAccounts);
+          setTransactions(cloudData.transactions);
+          setUsers(cloudData.users);
+          setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+          setCloudSyncStatus("synced");
+        } else {
+          // Empty database on cloud! Push current states to initialize
+          await saveToCloud({
+            templeInfo,
+            bankAccounts,
+            transactions,
+            users
+          });
+          setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+          setCloudSyncStatus("synced");
+        }
+      } catch (error) {
+        console.error("Failed to sync on boot:", error);
+        setCloudSyncStatus("error");
+      } finally {
+        setHasLoadedInitialCloud(true);
+      }
+    }
+    loadCloud();
+  }, []);
+
+  // Sync to Cloud automatically when states change (debounced 1.5s)
+  useEffect(() => {
+    if (!hasLoadedInitialCloud) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setCloudSyncStatus("syncing");
+        await saveToCloud({
+          templeInfo,
+          bankAccounts,
+          transactions,
+          users
+        });
+        setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+        setCloudSyncStatus("synced");
+      } catch (error) {
+        console.error("Auto sync to Cloud failed:", error);
+        setCloudSyncStatus("error");
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [templeInfo, bankAccounts, transactions, users, hasLoadedInitialCloud]);
+
+  const handleManualCloudSync = async () => {
+    try {
+      setCloudSyncStatus("syncing");
+      await saveToCloud({
+        templeInfo,
+        bankAccounts,
+        transactions,
+        users
+      });
+      setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+      setCloudSyncStatus("synced");
+      alert("ซิงค์ข้อมูลขึ้นระบบคลาวด์เสร็จสมบูรณ์!");
+    } catch (error) {
+      console.error("Manual sync failed:", error);
+      setCloudSyncStatus("error");
+      alert("ไม่สามารถเชื่อมต่อคลาวด์ได้ กรุณาตรวจสอบอินเทอร์เน็ต");
+    }
+  };
 
   const currentUser = users.find(u => u.username.toLowerCase() === username.toLowerCase()) || {
     username,
@@ -299,6 +385,40 @@ export default function App() {
               <h2 className="text-base font-black text-[#004899]">{templeInfo.name}</h2>
             </div>
             <span className="px-2.5 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-200/50">สถานะ: ปกติ</span>
+            
+            {/* Cloud Sync Status Badge */}
+            {cloudSyncStatus === "checking" && (
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-200/50 flex items-center gap-1">
+                <RefreshCw className="h-3 w-3 animate-spin text-amber-500" />
+                <span>ตรวจสอบ Cloud...</span>
+              </span>
+            )}
+            {cloudSyncStatus === "synced" && (
+              <span 
+                onClick={handleManualCloudSync}
+                title={`ซิงค์ข้อมูลล่าสุด: ${lastCloudSync || "-"}`}
+                className="px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 text-[10px] font-bold border border-sky-200/50 flex items-center gap-1 cursor-pointer hover:bg-sky-100 transition-colors"
+              >
+                <Cloud className="h-3 w-3 text-sky-500" />
+                <span>เชื่อมต่อ Cloud สำเร็จ (ซิงค์ {lastCloudSync || "-"})</span>
+              </span>
+            )}
+            {cloudSyncStatus === "syncing" && (
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200/50 flex items-center gap-1">
+                <RefreshCw className="h-3 w-3 animate-spin text-blue-500" />
+                <span>กำลังบันทึกข้อมูลขึ้น Cloud...</span>
+              </span>
+            )}
+            {cloudSyncStatus === "error" && (
+              <span 
+                onClick={handleManualCloudSync}
+                title="คลิกเพื่อลองเชื่อมต่อใหม่อีกครั้ง"
+                className="px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200/50 flex items-center gap-1 cursor-pointer hover:bg-rose-100 transition-colors"
+              >
+                <CloudOff className="h-3 w-3 text-rose-500" />
+                <span>บันทึกแบบออฟไลน์ (คลิกเพื่อเชื่อมต่อใหม่)</span>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-6">
             <div className="text-right text-xs">

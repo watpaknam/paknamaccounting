@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "TempleInfo": {
+      "title": "TempleInfo",
+      "description": "General information of the temple",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "abbotName": { "type": "string" },
+        "accountantName": { "type": "string" }
+      },
+      "required": ["name", "address", "abbotName", "accountantName"]
+    },
+    "BankAccount": {
+      "title": "BankAccount",
+      "description": "Bank account representation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "accountName": { "type": "string" },
+        "accountNo": { "type": "string" },
+        "bankName": { "type": "string" },
+        "initialBalance": { "type": "number" },
+        "currentBalance": { "type": "number" }
+      },
+      "required": ["id", "code", "accountName", "accountNo", "bankName", "initialBalance", "currentBalance"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Transaction entry (cash_in, cash_out, etc)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "day": { "type": "number" },
+        "month": { "type": "number" },
+        "year": { "type": "number" },
+        "documentNo": { "type": "string" },
+        "description": { "type": "string" },
+        "code": { "type": "string" },
+        "amount": { "type": "number" },
+        "documentImage": { "type": "string" },
+        "bankAccountId": { "type": "string" }
+      },
+      "required": ["id", "type", "day", "month", "year", "documentNo", "description", "code", "amount"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "User account for managing and entering data",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "canAdd": { "type": "boolean" },
+        "canEdit": { "type": "boolean" },
+        "canDelete": { "type": "boolean" }
+      },
+      "required": ["username", "role", "canAdd", "canEdit", "canDelete"]
+    }
+  },
+  "firestore": {
+    "/templeConfig/info": {
+      "schema": "TempleInfo",
+      "description": "Stores general temple details"
+    },
+    "/bankAccounts/{accountId}": {
+      "schema": "BankAccount",
+      "description": "Stores the lists of bank accounts"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Stores all financial transactions"
+    },
+    "/users/{username}": {
+      "schema": "UserAccount",
+      "description": "Stores temple web-app users"
+    }
+  }
+}
