@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { TempleInfo, BankAccount, Transaction, TransactionType, UserAccount } from "../types";
 import { INCOME_CODES, EXPENSE_CODES } from "../data";
-import { SUPABASE_SQL_SETUP, checkSupabaseConnection, saveToSupabase, fetchFromSupabase } from "../lib/supabase";
+import { SUPABASE_SQL_SETUP, checkSupabaseConnection, saveToSupabase, fetchFromSupabase, SUPABASE_URL, SUPABASE_ANON_KEY, updateSupabaseConfig, resetSupabaseConfig } from "../lib/supabase";
 
 interface DatabaseManagementProps {
   templeInfo: TempleInfo;
@@ -80,6 +80,31 @@ export default function DatabaseManagement({
   onSwitchProvider
 }: DatabaseManagementProps) {
   const [activeSubTab, setActiveSubTab] = useState<"transactions" | "bank" | "temple" | "auth" | "cloud">("transactions");
+
+  // Custom Supabase connection credentials
+  const [dbUrl, setDbUrl] = useState(() => localStorage.getItem("supabase_url") || SUPABASE_URL);
+  const [dbKey, setDbKey] = useState(() => localStorage.getItem("supabase_anon_key") || SUPABASE_ANON_KEY);
+  const [isEditingCredentials, setIsEditingCredentials] = useState(false);
+
+  const handleSaveCredentials = () => {
+    if (!dbUrl.trim() || !dbKey.trim()) {
+      alert("กรุณากรอกข้อมูล Supabase URL และ Anon / Publishable Key ให้ครบถ้วน");
+      return;
+    }
+    updateSupabaseConfig(dbUrl, dbKey);
+    setIsEditingCredentials(false);
+    triggerAlert("บันทึกข้อมูลและอัปเดตการซิงค์ Supabase เรียบร้อยแล้ว!");
+  };
+
+  const handleResetCredentials = () => {
+    if (window.confirm("คุณต้องการล้างการตั้งค่าข้อมูลเชื่อมต่อนี้และกลับไปใช้ค่าเริ่มต้นระบบใช่หรือไม่?")) {
+      resetSupabaseConfig();
+      setDbUrl(SUPABASE_URL);
+      setDbKey(SUPABASE_ANON_KEY);
+      setIsEditingCredentials(false);
+      triggerAlert("รีเซ็ตค่าเริ่มต้นระบบเชื่อมต่อ Supabase สำเร็จ!");
+    }
+  };
 
   // Supabase Sync & Connection State
   const [supabaseTestStatus, setSupabaseTestStatus] = useState<{
@@ -1695,25 +1720,89 @@ export default function DatabaseManagement({
 
               {/* Supabase Connection Status Panel */}
               <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 pb-3 border-b border-slate-100 flex items-center gap-1.5">
-                  <RefreshCw className="h-4 w-4 text-[#004899]" />
-                  <span>ตรวจสอบการเชื่อมต่อ Supabase</span>
-                </h3>
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <RefreshCw className="h-4 w-4 text-[#004899]" />
+                    <span>ตรวจสอบการเชื่อมต่อ Supabase</span>
+                  </h3>
+                  {!isEditingCredentials ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingCredentials(true)}
+                      className="text-[10px] font-bold text-[#004899] hover:underline cursor-pointer"
+                    >
+                      แก้ไขข้อมูลเชื่อมต่อ
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingCredentials(false)}
+                      className="text-[10px] font-bold text-slate-400 hover:underline cursor-pointer"
+                    >
+                      ยกเลิก
+                    </button>
+                  )}
+                </div>
 
                 <div className="space-y-3.5 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supabase URL:</span>
-                    <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title="https://qcuiclmntopdtgufwoib.supabase.co">
-                      https://qcuiclmntopdtgufwoib.supabase.co
-                    </p>
-                  </div>
+                  {isEditingCredentials ? (
+                    <div className="space-y-3 animate-fadeIn">
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Supabase URL:</span>
+                        <input
+                          type="text"
+                          value={dbUrl}
+                          onChange={(e) => setDbUrl(e.target.value)}
+                          placeholder="https://your-project.supabase.co"
+                          className="w-full font-mono text-[11px] p-2 rounded-lg border border-slate-200 focus:border-[#004899] focus:ring-1 focus:ring-[#004899] outline-none"
+                        />
+                      </div>
 
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Anon / Publishable Key:</span>
-                    <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title="sb_publishable_K99oGStL2Ep_4uu2YBUK_g_dGog2_6J">
-                      sb_publishable_K99o..._6J
-                    </p>
-                  </div>
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Anon / Publishable Key:</span>
+                        <textarea
+                          rows={3}
+                          value={dbKey}
+                          onChange={(e) => setDbKey(e.target.value)}
+                          placeholder="eyJhbGciOi..."
+                          className="w-full font-mono text-[10px] p-2 rounded-lg border border-slate-200 focus:border-[#004899] focus:ring-1 focus:ring-[#004899] outline-none resize-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleResetCredentials}
+                          className="py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                        >
+                          รีเซ็ตค่าเริ่มต้น
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveCredentials}
+                          className="py-1.5 bg-[#004899] hover:bg-[#002d62] text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                        >
+                          บันทึกการตั้งค่า
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 animate-fadeIn">
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supabase URL:</span>
+                        <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title={dbUrl}>
+                          {dbUrl}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Anon / Publishable Key:</span>
+                        <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title={dbKey}>
+                          {dbKey.substring(0, 15)}...{dbKey.substring(dbKey.length - 8)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="pt-1.5">
                     {supabaseTestStatus.connecting ? (

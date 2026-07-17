@@ -1,12 +1,82 @@
 import { createClient } from "@supabase/supabase-js";
 import { TempleInfo, BankAccount, Transaction, UserAccount } from "../types";
 
-// User-provided Supabase credentials
-const SUPABASE_URL = "https://qcuiclmntopdtgufwoib.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_K99oGStL2Ep_4uu2YBUK_g_dGog2_6J";
+// User-provided Supabase credentials (fallback defaults)
+export const SUPABASE_URL = "https://qcuiclmntopdtgufwoib.supabase.co";
+export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjdWljbG1udG9wZHRndWZ3b2liIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5Mzk3NTAsImV4cCI6MjA5OTUxNTc1MH0.XUhPW_ussz8z8HMlh3u3vLDqOZZzefAGWqYPqiy8UXE";
 
-// Initialize Supabase Client
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Decodes a Supabase JWT token to retrieve the project reference ("ref")
+export function getProjectRefFromToken(token: string): string | null {
+  try {
+    const parts = token.trim().split('.');
+    if (parts.length !== 3) return null;
+    const payloadJson = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const payload = JSON.parse(payloadJson);
+    return payload.ref || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Extract the project reference from a Supabase URL
+export function getProjectRefFromUrl(url: string): string | null {
+  try {
+    const cleanUrl = url.trim().replace("https://", "").replace("http://", "");
+    const hostParts = cleanUrl.split('.');
+    return hostParts[0] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+let initialUrl = localStorage.getItem("supabase_url") || SUPABASE_URL;
+let initialKey = localStorage.getItem("supabase_anon_key") || SUPABASE_ANON_KEY;
+
+// Self-healing: if the key has a valid project ref but the URL project ref is different,
+// automatically correct the URL to match the key's project ref!
+const tokenRef = getProjectRefFromToken(initialKey);
+if (tokenRef) {
+  const urlRef = getProjectRefFromUrl(initialUrl);
+  if (tokenRef !== urlRef) {
+    console.warn(`Supabase URL & Key project ref mismatch. Auto-correcting URL from ${urlRef} to https://${tokenRef}.supabase.co`);
+    initialUrl = `https://${tokenRef}.supabase.co`;
+    localStorage.setItem("supabase_url", initialUrl);
+  }
+}
+
+// Dynamically created client based on localStorage or fallback defaults
+let currentClient = createClient(initialUrl, initialKey);
+
+// Proxy to allow seamless live updates to the supabase client without full reload
+export const supabase = new Proxy({} as any, {
+  get(target, prop) {
+    return (currentClient as any)[prop];
+  }
+});
+
+export function updateSupabaseConfig(url: string, key: string) {
+  let cleanUrl = url.trim();
+  const cleanKey = key.trim();
+  
+  const tokenRef = getProjectRefFromToken(cleanKey);
+  if (tokenRef) {
+    const urlRef = getProjectRefFromUrl(cleanUrl);
+    if (tokenRef !== urlRef) {
+      console.warn(`Auto-correcting URL to match token project ref: https://${tokenRef}.supabase.co`);
+      cleanUrl = `https://${tokenRef}.supabase.co`;
+    }
+  }
+
+  localStorage.setItem("supabase_url", cleanUrl);
+  localStorage.setItem("supabase_anon_key", cleanKey);
+  currentClient = createClient(cleanUrl, cleanKey);
+}
+
+export function resetSupabaseConfig() {
+  localStorage.removeItem("supabase_url");
+  localStorage.removeItem("supabase_anon_key");
+  currentClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
 
 export interface SupabaseSyncData {
   templeInfo: TempleInfo;
@@ -25,11 +95,19 @@ export interface SupabaseStatus {
 // Check connection and check if required tables exist
 export async function checkSupabaseConnection(): Promise<SupabaseStatus> {
   try {
-    // 1. Simple query to test API connection
-    const { data, error } = await supabase.from("temple_info").select("count").limit(1);
+    // 1. Query to test API connection
+    const { data, error } = await supabase.from("temple_info").select("id").limit(1);
     
     if (error) {
-      if (error.code === "PGRST116" || error.message.includes("does not exist") || error.code === "42P01") {
+      const msg = error.message || "";
+      const isTableMissing = 
+        error.code === "PGRST116" || 
+        error.code === "42P01" || 
+        msg.includes("does not exist") || 
+        msg.includes("Could not find the table") || 
+        msg.includes("not found");
+
+      if (isTableMissing) {
         return {
           connected: true,
           tablesExist: false,
@@ -40,7 +118,7 @@ export async function checkSupabaseConnection(): Promise<SupabaseStatus> {
         connected: false,
         tablesExist: false,
         error: error.message,
-        details: `เชื่อมต่อล้มเหลว (รหัสข้อผิดพลาด: ${error.code})`
+        details: `เชื่อมต่อล้มเหลว (รหัสข้อผิดพลาด: ${error.code || "UNKNOWN"})`
       };
     }
     
