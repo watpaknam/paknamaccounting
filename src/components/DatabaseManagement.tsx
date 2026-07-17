@@ -18,10 +18,16 @@ import {
   LogOut,
   LogIn,
   Download,
-  Upload
+  Upload,
+  Cloud,
+  CloudOff,
+  RefreshCw,
+  Copy,
+  FileCode
 } from "lucide-react";
 import { TempleInfo, BankAccount, Transaction, TransactionType, UserAccount } from "../types";
 import { INCOME_CODES, EXPENSE_CODES } from "../data";
+import { SUPABASE_SQL_SETUP, checkSupabaseConnection, saveToSupabase, fetchFromSupabase } from "../lib/supabase";
 
 interface DatabaseManagementProps {
   templeInfo: TempleInfo;
@@ -47,6 +53,8 @@ interface DatabaseManagementProps {
     transactions: Transaction[],
     users: UserAccount[]
   ) => void;
+  cloudProvider?: "firebase" | "supabase";
+  onSwitchProvider?: (provider: "firebase" | "supabase") => void;
 }
 
 export default function DatabaseManagement({
@@ -67,9 +75,113 @@ export default function DatabaseManagement({
   onAddUser,
   onUpdateUser,
   onDeleteUser,
-  onImportBackup
+  onImportBackup,
+  cloudProvider = "supabase",
+  onSwitchProvider
 }: DatabaseManagementProps) {
-  const [activeSubTab, setActiveSubTab] = useState<"transactions" | "bank" | "temple" | "auth">("transactions");
+  const [activeSubTab, setActiveSubTab] = useState<"transactions" | "bank" | "temple" | "auth" | "cloud">("transactions");
+
+  // Supabase Sync & Connection State
+  const [supabaseTestStatus, setSupabaseTestStatus] = useState<{
+    tested: boolean;
+    connecting: boolean;
+    connected: boolean;
+    tablesExist: boolean;
+    error?: string;
+    details?: string;
+  }>({
+    tested: false,
+    connecting: false,
+    connected: false,
+    tablesExist: false
+  });
+
+  const [syncingAction, setSyncingAction] = useState<"push" | "pull" | null>(null);
+
+  const handleTestSupabase = async () => {
+    setSupabaseTestStatus(prev => ({ ...prev, connecting: true }));
+    try {
+      const status = await checkSupabaseConnection();
+      setSupabaseTestStatus({
+        tested: true,
+        connecting: false,
+        connected: status.connected,
+        tablesExist: status.tablesExist,
+        error: status.error,
+        details: status.details
+      });
+      if (status.connected) {
+        if (status.tablesExist) {
+          triggerAlert("เชื่อมต่อ Supabase สำเร็จและพบคอนฟิกตารางสมบูรณ์!");
+        } else {
+          triggerAlert("เชื่อมต่อสำเร็จ แต่ยังไม่ได้สร้างตารางโครงสร้างหลัก");
+        }
+      } else {
+        alert(`เชื่อมต่อล้มเหลว: ${status.error || "กรุณาตรวจสอบอินเทอร์เน็ต"}`);
+      }
+    } catch (err: any) {
+      setSupabaseTestStatus({
+        tested: true,
+        connecting: false,
+        connected: false,
+        tablesExist: false,
+        error: err.message || String(err),
+        details: "เกิดข้อผิดพลาดในการตรวจสอบ"
+      });
+    }
+  };
+
+  const handleForcePushSupabase = async () => {
+    if (!window.confirm("⚠️ ยืนยันการส่งออกข้อมูลขึ้นคลาวด์:\n\nคุณต้องการบันทึกข้อมูลในเครื่องนี้ทั้งหมดไปทับบนฐานข้อมูล Supabase ใช่หรือไม่? ข้อมูลเก่าใน Supabase จะถูกแทนที่ทั้งหมด")) {
+      return;
+    }
+    setSyncingAction("push");
+    try {
+      await saveToSupabase({
+        templeInfo,
+        bankAccounts,
+        transactions,
+        users
+      });
+      triggerAlert("อัปโหลดและเขียนทับข้อมูลบน Supabase คลาวด์สำเร็จ!");
+    } catch (error: any) {
+      console.error(error);
+      alert(`อัปโหลดล้มเหลว: ${error.message || "กรุณาตรวจสอบโครงสร้างตารางและการเชื่อมต่อ"}`);
+    } finally {
+      setSyncingAction(null);
+    }
+  };
+
+  const handleForcePullSupabase = async () => {
+    if (!window.confirm("⚠️ ยืนยันการกู้คืนข้อมูลลงเครื่อง:\n\nคุณต้องการนำข้อมูลใน Supabase คลาวด์ทั้งหมดมาเขียนทับข้อมูลในเครื่องนี้ใช่หรือไม่? ข้อมูลประวัติและรายการในเครื่องขณะนี้จะสูญหายทันที")) {
+      return;
+    }
+    setSyncingAction("pull");
+    try {
+      const data = await fetchFromSupabase();
+      if (data) {
+        onImportBackup(
+          data.templeInfo,
+          data.bankAccounts,
+          data.transactions,
+          data.users
+        );
+        triggerAlert("ดึงข้อมูลและเขียนทับระบบสำเร็จ!");
+      } else {
+        alert("ไม่พบข้อมูลเดิมบนคลาวด์ Supabase (ฐานข้อมูลยังว่างเปล่า)");
+      }
+    } catch (error: any) {
+      console.error(error);
+      alert(`ดึงข้อมูลล้มเหลว: ${error.message || "กรุณาตรวจสอบโครงสร้างตารางและการเชื่อมต่อ"}`);
+    } finally {
+      setSyncingAction(null);
+    }
+  };
+
+  const handleCopySQL = () => {
+    navigator.clipboard.writeText(SUPABASE_SQL_SETUP);
+    triggerAlert("คัดลอกรหัสสคริปต์ SQL เรียบร้อยแล้ว!");
+  };
   
   // User Management State
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -566,6 +678,17 @@ export default function DatabaseManagement({
         >
           <User className="h-3.5 w-3.5" />
           <span>บัญชีผู้ใช้งาน & ระบบ</span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab("cloud")}
+          className={`px-4 py-2.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeSubTab === "cloud" 
+              ? "bg-[#004899] text-white shadow-sm shadow-sky-100" 
+              : "text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          <Cloud className="h-3.5 w-3.5" />
+          <span>ตั้งค่า Cloud & Supabase Sync</span>
         </button>
       </div>
 
@@ -1510,6 +1633,271 @@ export default function DatabaseManagement({
 
               </div>
             </div>
+          </div>
+        )}
+
+        {/* TAB 5: CLOUD & SUPABASE SYNC */}
+        {activeSubTab === "cloud" && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start animate-fadeIn" id="db-cloud-panel">
+            
+            {/* Column 1: Connection & Active Provider Selector */}
+            <div className="lg:col-span-1 space-y-6">
+              
+              {/* Cloud Provider Switcher */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 pb-3 border-b border-slate-100 flex items-center gap-1.5">
+                  <Cloud className="h-4 w-4 text-[#004899]" />
+                  <span>เลือกผู้ให้บริการ Cloud หลัก</span>
+                </h3>
+                
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  ระบบจัดเตรียมโมดูลเชื่อมต่อระบบคลาวด์ไว้สองประเภท ท่านสามารถสลับไปมาระหว่างคลาวด์ได้ตามวัตถุประสงค์ (ฐานข้อมูลในแต่ละคลาวด์จะถูกบันทึกแยกกัน)
+                </p>
+
+                <div className="space-y-2.5 pt-1.5">
+                  <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                    cloudProvider === "supabase" 
+                      ? "border-[#004899] bg-sky-50/20" 
+                      : "border-slate-200 hover:bg-slate-50"
+                  }`}>
+                    <input
+                      type="radio"
+                      name="cloud_provider"
+                      checked={cloudProvider === "supabase"}
+                      onChange={() => onSwitchProvider?.("supabase")}
+                      className="mt-1 text-[#004899] focus:ring-[#004899]"
+                    />
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Supabase Cloud Database (แนะนำ)</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">ทำงานบนระบบฐานข้อมูล PostgreSQL ประสิทธิภาพสูง เหมาะกับข้อมูลเชิงสัมพันธ์</p>
+                    </div>
+                  </label>
+
+                  <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                    cloudProvider === "firebase" 
+                      ? "border-[#004899] bg-sky-50/20" 
+                      : "border-slate-200 hover:bg-slate-50"
+                  }`}>
+                    <input
+                      type="radio"
+                      name="cloud_provider"
+                      checked={cloudProvider === "firebase"}
+                      onChange={() => onSwitchProvider?.("firebase")}
+                      className="mt-1 text-[#004899] focus:ring-[#004899]"
+                    />
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Firebase Firestore Cloud</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">ทำงานบนระบบ NoSQL ของ Google สำหรับบันทึกเอกสารที่เน้นความเร็วและการเข้ากันได้สูง</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Supabase Connection Status Panel */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 pb-3 border-b border-slate-100 flex items-center gap-1.5">
+                  <RefreshCw className="h-4 w-4 text-[#004899]" />
+                  <span>ตรวจสอบการเชื่อมต่อ Supabase</span>
+                </h3>
+
+                <div className="space-y-3.5 text-xs">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supabase URL:</span>
+                    <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title="https://qcuiclmntopdtgufwoib.supabase.co">
+                      https://qcuiclmntopdtgufwoib.supabase.co
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Anon / Publishable Key:</span>
+                    <p className="font-mono text-[10px] bg-slate-50 p-2 rounded border border-slate-100 text-slate-600 truncate" title="sb_publishable_K99oGStL2Ep_4uu2YBUK_g_dGog2_6J">
+                      sb_publishable_K99o..._6J
+                    </p>
+                  </div>
+
+                  <div className="pt-1.5">
+                    {supabaseTestStatus.connecting ? (
+                      <div className="flex items-center gap-2 justify-center py-2.5 bg-slate-50 rounded-lg text-slate-500 font-bold border border-slate-200">
+                        <RefreshCw className="h-4 w-4 animate-spin text-[#004899]" />
+                        <span>กำลังตรวจสอบเซิร์ฟเวอร์...</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleTestSupabase}
+                        className="w-full py-2.5 bg-[#004899] hover:bg-[#002d62] text-white text-xs font-bold rounded-lg transition-all shadow-sm shadow-sky-100 cursor-pointer"
+                      >
+                        ทดสอบการเชื่อมต่อ (Test Connection)
+                      </button>
+                    )}
+                  </div>
+
+                  {supabaseTestStatus.tested && (
+                    <div className={`p-3.5 rounded-xl border text-xs space-y-1 animate-fadeIn ${
+                      supabaseTestStatus.connected 
+                        ? supabaseTestStatus.tablesExist
+                          ? "bg-emerald-50/50 border-emerald-200 text-emerald-800"
+                          : "bg-amber-50 border-amber-200 text-amber-800"
+                        : "bg-rose-50 border-rose-200 text-rose-800"
+                    }`}>
+                      <div className="flex items-start gap-1.5 font-bold">
+                        {supabaseTestStatus.connected ? (
+                          supabaseTestStatus.tablesExist ? (
+                            <>
+                              <Check className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                              <span>เชื่อมต่อสำเร็จ สมบูรณ์พร้อมใช้งาน</span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                              <span>เชื่อมต่อสำเร็จ แต่ยังไม่มีโครงสร้างตาราง</span>
+                            </>
+                          )
+                        ) : (
+                          <>
+                            <CloudOff className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                            <span>การเชื่อมต่อล้มเหลว</span>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-[10px] leading-relaxed font-medium mt-1">
+                        {supabaseTestStatus.connected 
+                          ? supabaseTestStatus.tablesExist
+                            ? "การเชื่อมต่อกับ Supabase สำเร็จ และพบคอนฟิกตารางโครงสร้างธุรกรรม บัญชีธนาคาร และผู้ใช้ เรียบร้อยแล้ว ระบบจะซิงค์ข้อมูลให้คุณโดยอัตโนมัติ"
+                            : "เซิร์ฟเวอร์ตอบรับการเชื่อมต่อแล้ว แต่ยังไม่มีตารางประวัติธุรกรรมในระบบ กรุณาใช้สคริปต์ SQL ด้านขวาเพื่อสร้างโครงสร้างตารางก่อนใช้งาน"
+                          : supabaseTestStatus.details || "กรุณาตรวจสอบอินเทอร์เน็ต รหัสผ่าน และการตั้งค่าของ Supabase"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Column 2 & 3: SQL Script Setup & Synchronization Buttons */}
+            <div className="lg:col-span-2 space-y-6">
+              
+              {/* Manual Synchronization Tools */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 pb-3 border-b border-slate-100 flex items-center gap-1.5">
+                  <Database className="h-4 w-4 text-[#004899]" />
+                  <span>เครื่องมือเขียนทับ/กู้คืนระบบผ่าน Supabase คลาวด์</span>
+                </h3>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  สำหรับกรณีที่ต้องการผลักดันฐานข้อมูลล่าสุดขึ้นไปบน Supabase เป็นค่าเริ่มต้น หรือต้องการดึงฐานข้อมูลเก่าใน Supabase มาแทนที่ข้อมูลบนอุปกรณ์นี้โดยทันที
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 text-xs">
+                  {/* Push Current Data */}
+                  <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-3.5 flex flex-col justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-700 flex items-center gap-1.5">
+                        <Upload className="h-4 w-4 text-[#004899]" />
+                        <span>ส่งออกข้อมูลขึ้น Cloud (Push)</span>
+                      </h4>
+                      <p className="text-[10px] text-slate-400 leading-relaxed mt-1">
+                        บันทึกโครงสร้างและยอดธุรกรรม/ข้อมูลวัดในอุปกรณ์ของคุณขณะนี้ไปจัดเก็บบน Supabase เพื่อสร้างเป็นข้อมูลสำรองชุดล่าสุด (จะบันทึกทับข้อมูลเดิมบนคลาวด์ทั้งหมด)
+                      </p>
+                    </div>
+                    
+                    <button
+                      type="button"
+                      disabled={syncingAction !== null}
+                      onClick={handleForcePushSupabase}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-[#004899] to-sky-600 text-white rounded-lg font-bold transition-all hover:opacity-95 cursor-pointer disabled:opacity-50"
+                    >
+                      {syncingAction === "push" ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin text-white" />
+                          <span>กำลังอัปโหลด...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4" />
+                          <span>ผลักข้อมูลขึ้น Supabase (Force Push)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Pull Current Data */}
+                  <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-3.5 flex flex-col justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-700 flex items-center gap-1.5">
+                        <Download className="h-4 w-4 text-emerald-600" />
+                        <span>ดึงข้อมูลลงจาก Cloud (Pull)</span>
+                      </h4>
+                      <p className="text-[10px] text-slate-400 leading-relaxed mt-1">
+                        ดึงข้อมูลธุรกรรม บัญชีธนาคาร ข้อมูลวัด และรายชื่อผู้ใช้งานระบบจากคลาวด์มาเขียนทับข้อมูลในเครื่องขณะนี้ทั้งหมด เพื่อทำการซิงค์ระบบหรือเปลี่ยนเครื่องทำงาน
+                      </p>
+                    </div>
+                    
+                    <button
+                      type="button"
+                      disabled={syncingAction !== null}
+                      onClick={handleForcePullSupabase}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg font-bold transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {syncingAction === "pull" ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin text-emerald-600" />
+                          <span>กำลังดาวน์โหลด...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-4 w-4" />
+                          <span>ดึงข้อมูลจาก Supabase (Force Pull)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* SQL Schema Setup Box */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-slate-100">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                      <FileCode className="h-4 w-4 text-amber-600" />
+                      <span>ขั้นตอนจัดเตรียมโครงสร้างฐานข้อมูล (Database Schema Setup)</span>
+                    </h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">จำเป็นต้องรันสคริปต์ด้านล่างนี้ในช่อง SQL Editor ของ Supabase เพียงครั้งแรกครั้งเดียว</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCopySQL}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer animate-none"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>คัดลอกรหัส SQL (Copy Code)</span>
+                  </button>
+                </div>
+
+                <div className="p-4 bg-slate-900 text-slate-200 font-mono rounded-xl border border-slate-800 overflow-hidden relative">
+                  <div className="absolute top-2 right-2 text-[9px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded uppercase font-bold tracking-widest">
+                    PostgreSQL
+                  </div>
+                  <pre className="text-[10px] max-h-72 overflow-y-auto leading-relaxed select-all cursor-pointer scrollbar-thin">
+                    {SUPABASE_SQL_SETUP}
+                  </pre>
+                </div>
+
+                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100/50 text-xs text-amber-800 space-y-2">
+                  <p className="font-bold flex items-center gap-1">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" /> ทำความเข้าใจเกี่ยวกับนโยบายความปลอดภัย (RLS):
+                  </p>
+                  <ul className="list-disc pl-5 text-[11px] leading-relaxed space-y-1">
+                    <li>สคริปต์ด้านบนได้เปิดใช้งาน Row Level Security (RLS) และสร้างนโยบายความปลอดภัยการเข้าถึงแบบสาธารณะผ่าน <strong>Anonymous (anon) Key</strong> เพื่อความสะดวกสบายในการบันทึกและกู้คืนข้อมูลแบบ Real-time</li>
+                    <li>ท่านสามารถแก้ไขนโยบายการเชื่อมต่อ RLS ภายหลังในเมนู Database ของ Supabase ได้หากต้องการเพิ่มความเข้มงวดความปลอดภัย</li>
+                  </ul>
+                </div>
+              </div>
+
+            </div>
+
           </div>
         )}
 

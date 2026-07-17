@@ -26,6 +26,7 @@ import {
   RefreshCw
 } from "lucide-react";
 import { fetchFromCloud, saveToCloud } from "./lib/firebase";
+import { fetchFromSupabase, saveToSupabase, checkSupabaseConnection } from "./lib/supabase";
 
 export default function App() {
   // Authentication State
@@ -90,16 +91,39 @@ export default function App() {
   }, [users]);
 
   // Cloud Database Sync State
+  const [cloudProvider, setCloudProvider] = useState<"firebase" | "supabase">(() => {
+    return (localStorage.getItem("cloud_provider") as "firebase" | "supabase") || "supabase";
+  });
   const [cloudSyncStatus, setCloudSyncStatus] = useState<"checking" | "synced" | "syncing" | "error" | "offline">("checking");
   const [lastCloudSync, setLastCloudSync] = useState<string | null>(null);
   const [hasLoadedInitialCloud, setHasLoadedInitialCloud] = useState(false);
 
-  // Load from Cloud once on startup
+  // Load from Cloud once on startup or when provider changes
   useEffect(() => {
     async function loadCloud() {
       try {
         setCloudSyncStatus("checking");
-        const cloudData = await fetchFromCloud();
+        let cloudData = null;
+
+        if (cloudProvider === "supabase") {
+          const status = await checkSupabaseConnection();
+          if (status.connected) {
+            if (status.tablesExist) {
+              cloudData = await fetchFromSupabase();
+            } else {
+              // Tables do not exist yet. Running in offline/uninitialized state
+              console.warn("Supabase tables not initialized yet.");
+              setCloudSyncStatus("error");
+              setHasLoadedInitialCloud(true);
+              return;
+            }
+          } else {
+            throw new Error(status.error || "Supabase connection failed");
+          }
+        } else {
+          cloudData = await fetchFromCloud();
+        }
+
         if (cloudData) {
           setTempleInfo(cloudData.templeInfo);
           setBankAccounts(cloudData.bankAccounts);
@@ -109,12 +133,21 @@ export default function App() {
           setCloudSyncStatus("synced");
         } else {
           // Empty database on cloud! Push current states to initialize
-          await saveToCloud({
-            templeInfo,
-            bankAccounts,
-            transactions,
-            users
-          });
+          if (cloudProvider === "supabase") {
+            await saveToSupabase({
+              templeInfo,
+              bankAccounts,
+              transactions,
+              users
+            });
+          } else {
+            await saveToCloud({
+              templeInfo,
+              bankAccounts,
+              transactions,
+              users
+            });
+          }
           setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
           setCloudSyncStatus("synced");
         }
@@ -126,7 +159,7 @@ export default function App() {
       }
     }
     loadCloud();
-  }, []);
+  }, [cloudProvider]);
 
   // Sync to Cloud automatically when states change (debounced 1.5s)
   useEffect(() => {
@@ -135,14 +168,30 @@ export default function App() {
     const timer = setTimeout(async () => {
       try {
         setCloudSyncStatus("syncing");
-        await saveToCloud({
-          templeInfo,
-          bankAccounts,
-          transactions,
-          users
-        });
-        setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
-        setCloudSyncStatus("synced");
+        if (cloudProvider === "supabase") {
+          const status = await checkSupabaseConnection();
+          if (status.connected && status.tablesExist) {
+            await saveToSupabase({
+              templeInfo,
+              bankAccounts,
+              transactions,
+              users
+            });
+            setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+            setCloudSyncStatus("synced");
+          } else {
+            setCloudSyncStatus("error");
+          }
+        } else {
+          await saveToCloud({
+            templeInfo,
+            bankAccounts,
+            transactions,
+            users
+          });
+          setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
+          setCloudSyncStatus("synced");
+        }
       } catch (error) {
         console.error("Auto sync to Cloud failed:", error);
         setCloudSyncStatus("error");
@@ -150,25 +199,47 @@ export default function App() {
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [templeInfo, bankAccounts, transactions, users, hasLoadedInitialCloud]);
+  }, [templeInfo, bankAccounts, transactions, users, hasLoadedInitialCloud, cloudProvider]);
 
   const handleManualCloudSync = async () => {
     try {
       setCloudSyncStatus("syncing");
-      await saveToCloud({
-        templeInfo,
-        bankAccounts,
-        transactions,
-        users
-      });
+      if (cloudProvider === "supabase") {
+        const status = await checkSupabaseConnection();
+        if (!status.connected) {
+          throw new Error(status.details || "Cannot connect to Supabase");
+        }
+        if (!status.tablesExist) {
+          throw new Error("ยังไม่ได้สร้างตารางในฐานข้อมูล Supabase กรุณาเข้าเมนูจัดการข้อมูลเพื่อสร้างตารางผ่านสคริปต์ SQL");
+        }
+        await saveToSupabase({
+          templeInfo,
+          bankAccounts,
+          transactions,
+          users
+        });
+      } else {
+        await saveToCloud({
+          templeInfo,
+          bankAccounts,
+          transactions,
+          users
+        });
+      }
       setLastCloudSync(new Date().toLocaleTimeString("th-TH"));
       setCloudSyncStatus("synced");
-      alert("ซิงค์ข้อมูลขึ้นระบบคลาวด์เสร็จสมบูรณ์!");
-    } catch (error) {
+      alert(`ซิงค์ข้อมูลขึ้นระบบคลาวด์ (${cloudProvider === "supabase" ? "Supabase" : "Firebase"}) เสร็จสมบูรณ์!`);
+    } catch (error: any) {
       console.error("Manual sync failed:", error);
       setCloudSyncStatus("error");
-      alert("ไม่สามารถเชื่อมต่อคลาวด์ได้ กรุณาตรวจสอบอินเทอร์เน็ต");
+      alert(`ไม่สามารถเชื่อมต่อคลาวด์ได้: ${error.message || "กรุณาตรวจสอบอินเทอร์เน็ต"}`);
     }
+  };
+
+  const handleSwitchProvider = (provider: "firebase" | "supabase") => {
+    setCloudProvider(provider);
+    localStorage.setItem("cloud_provider", provider);
+    setCloudSyncStatus("checking");
   };
 
   const currentUser = users.find(u => u.username.toLowerCase() === username.toLowerCase()) || {
@@ -390,7 +461,7 @@ export default function App() {
             {cloudSyncStatus === "checking" && (
               <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-200/50 flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 animate-spin text-amber-500" />
-                <span>ตรวจสอบ Cloud...</span>
+                <span>ตรวจสอบ {cloudProvider === "supabase" ? "Supabase" : "Firebase"}...</span>
               </span>
             )}
             {cloudSyncStatus === "synced" && (
@@ -400,13 +471,13 @@ export default function App() {
                 className="px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 text-[10px] font-bold border border-sky-200/50 flex items-center gap-1 cursor-pointer hover:bg-sky-100 transition-colors"
               >
                 <Cloud className="h-3 w-3 text-sky-500" />
-                <span>เชื่อมต่อ Cloud สำเร็จ (ซิงค์ {lastCloudSync || "-"})</span>
+                <span>เชื่อมต่อ {cloudProvider === "supabase" ? "Supabase" : "Firebase"} สำเร็จ (ซิงค์ {lastCloudSync || "-"})</span>
               </span>
             )}
             {cloudSyncStatus === "syncing" && (
               <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-200/50 flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 animate-spin text-blue-500" />
-                <span>กำลังบันทึกข้อมูลขึ้น Cloud...</span>
+                <span>กำลังบันทึกข้อมูลขึ้น {cloudProvider === "supabase" ? "Supabase" : "Firebase"}...</span>
               </span>
             )}
             {cloudSyncStatus === "error" && (
@@ -416,7 +487,7 @@ export default function App() {
                 className="px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200/50 flex items-center gap-1 cursor-pointer hover:bg-rose-100 transition-colors"
               >
                 <CloudOff className="h-3 w-3 text-rose-500" />
-                <span>บันทึกแบบออฟไลน์ (คลิกเพื่อเชื่อมต่อใหม่)</span>
+                <span>บันทึกแบบออฟไลน์ ({cloudProvider === "supabase" ? "Supabase" : "Firebase"}) (คลิกเพื่อเชื่อมต่อใหม่)</span>
               </span>
             )}
           </div>
@@ -493,6 +564,8 @@ export default function App() {
               onUpdateUser={handleUpdateUser}
               onDeleteUser={handleDeleteUser}
               onImportBackup={handleImportBackup}
+              cloudProvider={cloudProvider}
+              onSwitchProvider={handleSwitchProvider}
             />
           )}
 
