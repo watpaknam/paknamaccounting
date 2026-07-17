@@ -1,8 +1,42 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+
+    // syncMeta: store lastModified timestamps per collection
+    match /syncMeta/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // templeConfig/info
+    match /templeConfig/info {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // bankAccounts: read public, write admin only
+    match /bankAccounts/{accId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // transactions: read public; write admin only by default
+    match /transactions/{txId} {
+      allow read: if true;
+      // TODO: allow write for permitted users if required
+      allow write: if isAdmin();
+    }
+
+    // users: allow users to read their own doc; admin can manage all
+    match /users/{username} {
+      allow read: if isAdmin() || (request.auth != null && request.auth.token.email == resource.data.email);
+      allow create: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    // helper: check admin via custom claim 'admin'
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
     }
   }
 }
