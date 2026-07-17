@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "gen:firebase": "node scripts/generate-firebase-config.js",
+    "prebuild": "npm run gen:firebase"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
