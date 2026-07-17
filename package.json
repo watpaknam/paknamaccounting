@@ -10,7 +10,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "gen:firebase": "node scripts/generate-firebase-config.js",
-    "prebuild": "npm run gen:firebase"
+    "prebuild": "npm run gen:firebase",
+    "test": "vitest"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -33,6 +34,7 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
-    "@types/express": "^4.17.21"
+    "@types/express": "^4.17.21",
+    "vitest": "^1.0.0"
   }
 }
